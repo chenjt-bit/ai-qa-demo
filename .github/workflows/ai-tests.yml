@@ -27,7 +27,27 @@ jobs:
 
     - name: 执行快速测试（Mork）
       run: |
-        pytest -v -m "not real_api"
+        pytest -v -m "not real_api" --alluredir=./allure-results
+
+    # 👇 新增：使用官方插件生成漂亮的 Allure 报告
+    - name: 生成 Allure 报告
+      uses: simple-elf/allure-report-action@master
+      if: always() # 即使测试失败，也要生成报告
+      with:
+        allure_results: allure-results
+        allure_report: allure-report
+        gh_pages: gh-pages
+        allure_history: allure-history
+
+    # 👇 新增：把整个报告目录打包成 zip，供你下载
+    - name: 上传 Allure 报告
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: allure-report
+        path: allure-report/
+        retention-days: 7
+
 
   # 任务 2：真实大模型测试（只有你手动点击时，或者定时才跑）
   real-api-tests:
