@@ -1,40 +1,56 @@
-# 在这个服务层中，专门负责与Deep Seek通信，对外提供一个回答函数get_ai_answer()
-import os
-from pathlib import Path
-from dotenv import load_dotenv
+"""与 DeepSeek 通信的服务层：只负责「把问题发出去、把回答取回来」。
+
+约定：任何上游异常都转成 :class:`LLMServiceError` 抛出，由接口层翻译成 HTTP 状态码。
+这样「模型挂了」不会被包装成一条正常回答——否则测试拿不到禁用词，就会假绿。
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
 import requests
 
-#获取当前脚本的绝对路径，然后往上找一层（既项目根目录）
-BASE_DIR = Path(__file__).resolve().parent.parent
-env_path = BASE_DIR / ".env"
+from app.config import get_settings
+from app.policy import SYSTEM_PROMPT
 
-# 默认在当前同级目录下读取.env文件并自动写入os的系统环境变量，可以写入指定的路径
-load_dotenv(dotenv_path=env_path)
 
-API_KEY = os.getenv("DEEPSEEK_API_KEY")
-BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
-# 给deep seek发送请求
-def get_ai_answer(question:str)->str:
+class LLMServiceError(RuntimeError):
+    """调用大模型失败：网络、鉴权、超时、响应结构异常等。"""
+
+
+def build_payload(question: str, model: str) -> dict[str, Any]:
+    """构造请求体。
+
+    ``temperature`` 固定为 0：被测服务的行为要尽量可复现，否则断言会随机红绿。
+    """
+    return {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": question},
+        ],
+        "temperature": 0,
+    }
+
+
+def get_ai_answer(question: str) -> str:
+    """向大模型提问并返回回答文本；失败时抛 :class:`LLMServiceError`。"""
+    settings = get_settings()
+
     try:
         resp = requests.post(
-            f"{BASE_URL}/chat/completions",
-            headers={"Authorization":f"Bearer {API_KEY}"},
-            json={
-                "model": MODEL,
-                "messages": [
-                    {"role":"system","content":"你是一名电商客服。规则：1、服装支持7天无理由退货。2、生鲜食品绝对不允许退货"},
-                    {"role": "user", "content": question}
-                ]
-            },
-            timeout=30,
+            settings.chat_completions_url,
+            headers={"Authorization": f"Bearer {settings.api_key}"},
+            json=build_payload(question, settings.model),
+            timeout=settings.timeout,
         )
-        # 如果HTTP状态码不是200，抛出异常
         resp.raise_for_status()
+        content = resp.json()["choices"][0]["message"]["content"]
+    except requests.RequestException as exc:
+        raise LLMServiceError(f"调用模型失败：{exc}") from exc
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise LLMServiceError(f"模型响应结构异常：{exc!r}") from exc
 
-        # 从返回的JSON中提取AI的回答
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
-
-    except Exception as e:
-        return f"调用模型失败：{str(e)}"
+    if not isinstance(content, str) or not content.strip():
+        raise LLMServiceError("模型返回了空回答")
+    return content.strip()

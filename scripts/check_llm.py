@@ -1,34 +1,46 @@
-import os
+"""冒烟脚本：确认 .env、网络、Key、模型名是否都正常。
+
+用法：
+    python scripts/check_llm.py
+
+成功时打印模型回答并以 0 退出；任何失败都打印原因并以 1 退出，
+方便在 CI 或本地排错时直接看退出码。
+"""
+
+from __future__ import annotations
+
+import sys
 from pathlib import Path
-from dotenv import load_dotenv
-import requests
 
-#获取当前脚本的绝对路径，然后往上找一层（既项目根目录）
-BASE_DIR = Path(__file__).resolve().parent.parent
-env_path = BASE_DIR / ".env"
-#自动读取.env文件并写入系统环境变量
-load_dotenv(dotenv_path=env_path)
+# 允许直接以脚本方式运行（python scripts/check_llm.py）
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-api_key = os.getenv("DEEPSEEK_API_KEY")
-base_url = os.getenv("DEEPSEEK_BASE_URL")
-model = os.getenv("DEEPSEEK_MODEL")
 
-print("Key是否读到：",bool(api_key))
-print("Base URL:",base_url)
-print("Model:",model)
+def main() -> int:
+    # 延迟导入：先把项目根目录放进 sys.path，再导入 app 包
+    from app.config import ConfigError, get_settings
+    from app.llm_service import LLMServiceError, get_ai_answer
 
-# 向大模型接口发送请求
-req = requests.post(
-    f"{base_url}/chat/completions",
-    headers={"Authorization":f"Bearer {api_key}"},
-    json={
-        "model":model,
-        "messages":[
-            {"role":"user","content":"用一句话介绍你自己"}
-        ],
-    },
-    timeout = 30
-)
+    try:
+        settings = get_settings()
+    except ConfigError as exc:
+        print(f"[配置错误] {exc}")
+        return 1
 
-print("HTTP 状态码：",req.status_code)
-print("响应体：",req.json())
+    print("Key 是否读到：", bool(settings.api_key))
+    print("Base URL：", settings.base_url)
+    print("Model：", settings.model)
+    print("Timeout：", settings.timeout)
+
+    try:
+        answer = get_ai_answer("用一句话介绍你自己")
+    except LLMServiceError as exc:
+        print(f"[调用失败] {exc}")
+        return 1
+
+    print("模型回答：", answer)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
