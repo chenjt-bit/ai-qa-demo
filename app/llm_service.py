@@ -22,7 +22,10 @@ def get_ai_answer(question:str)->str:
             headers={"Authorization":f"Bearer {API_KEY}"},
             json={
                 "model": MODEL,
-                "messages": [{"role": "user", "content": question}]
+                "messages": [
+                    {"role":"system","content":"你是一名电商客服。规则：1、服装支持7天无理由退货。2、生鲜食品绝对不允许退货"},
+                    {"role": "user", "content": question}
+                ]
             },
             timeout=30,
         )
